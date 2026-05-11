@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Analizador de Tiro</title>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:-apple-system,sans-serif;background:#0a0a0a;color:white;min-height:100vh}
+        .app{max-width:500px;margin:0 auto;padding:8px}
+        .header{background:linear-gradient(135deg,#1a1a2e,#16213e);padding:12px;border-radius:12px;text-align:center;margin-bottom:8px;border:1px solid #333}
+        .header h1{font-size:1.4em}
+        .camera-box{position:relative;background:#000;border-radius:12px;overflow:hidden;margin-bottom:8px;aspect-ratio:4/3;border:2px solid #333}
+        video,canvas{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover}
+        canvas{z-index:5}
+        .feedback{position:absolute;top:10px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.9);padding:8px 20px;border-radius:20px;z-index:10;font-weight:bold;font-size:14px;border:2px solid #555}
+        .feedback.excelente{background:rgba(0,255,0,0.3);border-color:#00ff00;box-shadow:0 0 20px rgba(0,255,0,0.5)}
+        .feedback.bueno{background:rgba(255,165,0,0.3);border-color:#ffa500;box-shadow:0 0 20px rgba(255,165,0,0.5)}
+        .feedback.malo{background:rgba(255,0,0,0.3);border-color:#ff0000;box-shadow:0 0 20px rgba(255,0,0,0.5)}
+        button{padding:14px;border:none;border-radius:10px;font-size:15px;font-weight:bold;cursor:pointer;color:white;width:100%;margin-bottom:8px}
+        button:active{transform:scale(0.96)}
+        button:disabled{opacity:0.4}
+        .btn-start{background:linear-gradient(135deg,#667eea,#764ba2)}
+        .btn-stop{background:linear-gradient(135deg,#f093fb,#f5576c)}
+        .metrics{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px}
+        .metric{background:rgba(255,255,255,0.05);padding:10px;border-radius:10px;text-align:center;border:2px solid #333}
+        .metric.perfect{border-color:#00ff00;background:rgba(0,255,0,0.1)}
+        .metric.good{border-color:#ffa500;background:rgba(255,165,0,0.1)}
+        .metric.bad{border-color:#ff0000;background:rgba(255,0,0,0.1)}
+        .dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:5px;background:#555}
+        .dot.green{background:#00ff00;box-shadow:0 0 8px #00ff00}
+        .dot.orange{background:#ffa500;box-shadow:0 0 8px #ffa500}
+        .dot.red{background:#ff0000;box-shadow:0 0 8px #ff0000}
+        .tips{background:rgba(255,255,255,0.03);border:1px solid #333;border-radius:10px;padding:10px;font-size:0.8em}
+        .tip{padding:6px 8px;margin:3px 0;background:rgba(255,255,255,0.03);border-radius:6px;border-left:3px solid #ffa500}
+        .score{text-align:center;font-size:1.5em;font-weight:bold;margin:5px 0}
+        .score.perfect{color:#00ff00}
+        .score.good{color:#ffa500}
+        .score.bad{color:#ff0000}
+    </style>
+</head>
+<body>
+    <div class="app">
+        <div class="header">
+            <h1>ANALIZADOR DE TIRO</h1>
+            <p style="color:#888;font-size:0.8em">Lineas de postura en tiempo real</p>
+        </div>
+        
+        <div class="camera-box">
+            <video id="video" autoplay playsinline></video>
+            <canvas id="canvas"></canvas>
+            <div class="feedback" id="feedback">LISTO</div>
+        </div>
+        
+        <div class="score" id="score"></div>
+        
+        <button class="btn-start" id="btnStart" onclick="startCamera()">INICIAR CAMARA</button>
+        <button class="btn-stop" id="btnStop" onclick="stopAll()" disabled>DETENER</button>
+        
+        <div class="metrics">
+            <div class="metric" id="metHombros">
+                <div style="color:#aaa;font-size:0.75em">HOMBROS</div>
+                <div><span class="dot" id="dotHombros"></span><span id="valHombros">--</span></div>
+            </div>
+            <div class="metric" id="metCodos">
+                <div style="color:#aaa;font-size:0.75em">CODOS</div>
+                <div><span class="dot" id="dotCodos"></span><span id="valCodos">--</span></div>
+            </div>
+            <div class="metric" id="metMuneca">
+                <div style="color:#aaa;font-size:0.75em">MUNECA</div>
+                <div><span class="dot" id="dotMuneca"></span><span id="valMuneca">--</span></div>
+            </div>
+            <div class="metric" id="metCore">
+                <div style="color:#aaa;font-size:0.75em">CORE</div>
+                <div><span class="dot" id="dotCore"></span><span id="valCore">--</span></div>
+            </div>
+        </div>
+        
+        <div class="tips">
+            <strong>CORRECCIONES</strong>
+            <div id="tipsList">Inicia la camara para comenzar</div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.min.js"></script>
+    <script>
+        let detector, video, canvas, ctx, stream, running = false;
+        const VERDE = '#00ff00';
+        const NARANJA = '#ffa500';
+        const ROJO = '#ff0000';
+        const AZUL = '#00bfff';
+        
+        async function startCamera() {
+            video = document.getElementById('video');
+            canvas = document.getElementById('canvas');
+            ctx = canvas.getContext('2d');
+            
+            stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'user', width: 640, height: 480 }
+            });
+            video.srcObject = stream;
+            
+            video.onloadedmetadata = async function() {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                
+                document.getElementById('feedback').textContent = 'CARGANDO IA...';
+                const model = poseDetection.SupportedModels.BlazePose;
+                detector = await poseDetection.createDetector(model, {
+                    runtime: 'tfjs',
+                    modelType: 'lite',
+                    enableSmoothing: true
+                });
+                
+                document.getElementById('feedback').textContent = 'ANALIZANDO';
+                document.getElementById('btnStart').disabled = true;
+                document.getElementById('btnStop').disabled = false;
+                running = true;
+                analyzeLoop();
+            };
+        }
+        
+        function stopAll() {
+            running = false;
+            if(stream) stream.getTracks().forEach(function(t) { t.stop(); });
+            video.srcObject = null;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            document.getElementById('btnStart').disabled = false;
+            document.getElementById('btnStop').disabled = true;
+            document.getElementById('feedback').textContent = 'LISTO';
+            document.getElementById('feedback').className = 'feedback';
+            document.getElementById('score').textContent = '';
+            document.getElementById('tipsList').innerHTML = 'Analisis detenido';
+            ['Hombros','Codos','Muneca','Core'].forEach(function(m) {
+                document.getElementById('met'+m).className = 'metric';
+                document.getElementById('dot'+m).className = 'dot';
+                document.getElementById('val'+m).textContent = '--';
+            });
+        }
+        
+        async function analyzeLoop() {
+            if(!running) return;
+            
+            var poses = await detector.estimatePoses(video);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            if(poses.length > 0) {
+                var kp = poses[0].keypoints;
+                drawSkeleton(kp);
+                analyzePosture(kp);
+            }
+            
+            requestAnimationFrame(analyzeLoop);
+        }
+        
+        function drawSkeleton(kp) {
+            var shoulderAlign = (kp[11].score>0.5 && kp[12].score>0.5) ? Math.abs(kp[11].y - kp[12].y) : 999;
+            var elbowAlign = (kp[13].score>0.5 && kp[14].score>0.5) ? Math.abs(kp[13].y - kp[14].y) : 999;
+            var armColor = VERDE;
+            if(shoulderAlign > 40 || elbowAlign > 50) armColor = ROJO;
+            else if(shoulderAlign > 25 || elbowAlign > 35) armColor = NARANJA;
+            
+            var connections = [
+                [11,12,AZUL], [11,23,AZUL], [12,24,AZUL], [23,24,AZUL],
+                [11,13,armColor], [13,15,armColor], [12,14,armColor], [14,16,armColor],
+                [23,25,AZUL], [25,27,AZUL], [24,26,AZUL], [26,28,AZUL]
+            ];
+            
+            connections.forEach(function(c) {
+                var from = kp[c[0]], to = kp[c[1]], color = c[2];
+                if(from.score > 0.5 && to.score > 0.5) {
+                    ctx.beginPath();
+                    ctx.moveTo(from.x, from.y);
+                    ctx.lineTo(to.x, to.y);
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = 3;
+                    ctx.shadowColor = color;
+                    ctx.shadowBlur = 10;
+                    ctx.stroke();
+                    ctx.shadowBlur = 0;
+                }
+            });
+            
+            kp.forEach(function(p, i) {
+                if(p.score > 0.5) {
+                    var color = ([11,12,13,14,15,16].indexOf(i) >= 0) ? armColor : AZUL;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 5, 0, Math.PI*2);
+                    ctx.fillStyle = color;
+                    ctx.shadowColor = color;
+                    ctx.shadowBlur = 15;
+                    ctx.fill();
+                    ctx.shadowBlur = 0;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 5, 0, Math.PI*2);
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 1.5;
+                    ctx.stroke();
+                }
+            });
+        }
+        
+        function analyzePosture(kp) {
+            var totalScore = 100;
+            var tips = [];
+            
+            if(kp[11].score > 0.5 && kp[12].score > 0.5) {
+                var dif = Math.abs(kp[11].y - kp[12].y);
+                if(dif < 15) updateMetric('Hombros', 'PERFECTO', 'green', 'perfect');
+                else if(dif < 30) { updateMetric('Hombros', 'REGULAR', 'orange', 'good'); totalScore -= 20; tips.push('Endereza hombros'); }
+                else { updateMetric('Hombros', 'CORREGIR', 'red', 'bad'); totalScore -= 40; tips.push('ENDEREZA HOMBROS!'); }
+            }
+            
+            if(kp[13].score > 0.5 && kp[14].score > 0.5) {
+                var dif = Math.abs(kp[13].y - kp[14].y);
+                if(dif < 20) updateMetric('Codos', 'PERFECTO', 'green', 'perfect');
+                else if(dif < 40) { updateMetric('Codos', 'REGULAR', 'orange', 'good'); totalScore -= 15; tips.push('Nivela codos'); }
+                else { updateMetric('Codos', 'CORREGIR', 'red', 'bad'); totalScore -= 35; tips.push('NIVELA CODOS!'); }
+            }
+            
+            if(kp[14].score > 0.5 && kp[16].score > 0.5) {
+                var angle = Math.abs(Math.atan2(kp[16].y - kp[14].y, kp[16].x - kp[14].x) * 180 / Math.PI);
+                if(angle < 30) updateMetric('Muneca', 'PERFECTO', 'green', 'perfect');
+                else if(angle < 60) { updateMetric('Muneca', 'REGULAR', 'orange', 'good'); totalScore -= 15; tips.push('Alinea muneca'); }
+                else { updateMetric('Muneca', 'CORREGIR', 'red', 'bad'); totalScore -= 30; tips.push('ALINEA MUNECA!'); }
+            }
+            
+            if(kp[23].score > 0.5 && kp[24].score > 0.5) {
+                var dif = Math.abs(kp[23].y - kp[24].y);
+                if(dif < 12) updateMetric('Core', 'PERFECTO', 'green', 'perfect');
+                else if(dif < 25) { updateMetric('Core', 'REGULAR', 'orange', 'good'); totalScore -= 15; tips.push('Estabiliza core'); }
+                else { updateMetric('Core', 'CORREGIR', 'red', 'bad'); totalScore -= 30; tips.push('ACTIVA CORE!'); }
+            }
+            
+            var scoreEl = document.getElementById('score');
+            var fb = document.getElementById('feedback');
+            
+            if(totalScore >= 90) {
+                scoreEl.textContent = totalScore + '% - EXCELENTE';
+                scoreEl.className = 'score perfect';
+                fb.textContent = 'TECNICA PERFECTA!';
+                fb.className = 'feedback excelente';
+            } else if(totalScore >= 60) {
+                scoreEl.textContent = totalScore + '% - REGULAR';
+                scoreEl.className = 'score good';
+                fb.textContent = 'MEJORABLE';
+                fb.className = 'feedback bueno';
+            } else {
+                scoreEl.textContent = totalScore + '% - CORREGIR';
+                scoreEl.className = 'score bad';
+                fb.textContent = 'CORRIGE!';
+                fb.className = 'feedback malo';
+            }
+            
+            var tipsList = document.getElementById('tipsList');
+            if(tips.length === 0) tipsList.innerHTML = '<div class="tip">Tecnica perfecta!</div>';
+            else tipsList.innerHTML = tips.map(function(t) { return '<div class="tip">' + t + '</div>'; }).join('');
+            
+            if(totalScore < 60 && navigator.vibrate) navigator.vibrate(100);
+        }
+        
+        function updateMetric(name, status, dotClass, metClass) {
+            document.getElementById('met'+name).className = 'metric ' + metClass;
+            document.getElementById('dot'+name).className = 'dot ' + dotClass;
+            document.getElementById('val'+name).textContent = status;
+        }
+    </script>
+</body>
+</html>
